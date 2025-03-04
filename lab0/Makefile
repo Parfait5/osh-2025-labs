@@ -16,3 +16,8 @@ $(TARGET): $(OBJS)
 
 clean:
 	rm -f $(OBJS) $(TARGET)
+
+DEBUG_FLAGS = -DDEBUG
+
+debug: CXXFLAGS += $(DEBUG_FLAGS)
+debug: clean $(TARGET)
