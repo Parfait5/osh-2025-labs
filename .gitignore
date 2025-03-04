@@ -1,11 +1,11 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/ # ignore __pycache__ folder
-*.py[cod] # ignore all files ending in .pyc, .pyo, .pyd (regex-like)
-*$py.class # ignore all files ending in $py.class
-
 # C extensions
-*.so # ignore all files ending in .so
+*.o
+*.out
+bubble_sort
 
-# Distribution / packaging
-.Python # ignore the file .Python
+# 编辑器文件
+.vscode/
+*.swp
+*~
+
 build/ # ignore build folder
