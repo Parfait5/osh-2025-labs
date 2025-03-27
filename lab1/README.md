@@ -30,6 +30,7 @@ qemu-system-aarch64 -machine virt -cpu cortex-a57 -m 1024 \
 ---
 ### 创建初始内存盘
 
+![运行图片](https://github.com/Parfait5/osh-2025-labs/blob/master/lab1/figs/fig1.png)
 
 
 ---
