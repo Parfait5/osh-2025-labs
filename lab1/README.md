@@ -32,6 +32,9 @@ qemu-system-aarch64 -machine virt -cpu cortex-a57 -m 1024 \
 
 ![运行图片](https://github.com/Parfait5/osh-2025-labs/blob/master/lab1/figs/fig1.png)
 
+删去while (1) {}, 编译的内存盘 kernel panic 的原因：
+
+init 进程不能退出，否则内核会认为系统无法继续运行，触发 kernel panic。删除 while(1){} 后，main() 结束，程序返回 0，导致 init 进程退出，最终引发 kernel panic。
 
 ---
 ### 添加自定义系统调用
