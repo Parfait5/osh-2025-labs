@@ -38,3 +38,5 @@ init 进程不能退出，否则内核会认为系统无法继续运行，触发
 
 ---
 ### 添加自定义系统调用
+
+![运行图片](https://github.com/Parfait5/osh-2025-labs/blob/master/lab1/figs/fig2.jpg)
