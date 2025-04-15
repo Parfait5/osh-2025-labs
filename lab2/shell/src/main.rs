@@ -2,6 +2,7 @@ use std::io::Write;          // 输入输出模块
 use std::io::{self, BufRead};
 use std::env;
 use std::ptr;
+use std::process::{Command, Stdio};
 use std::ffi::OsString;
 use std::sync::atomic::{AtomicBool, Ordering, AtomicPtr};
 
@@ -77,10 +78,28 @@ fn eval(tokens: Vec<String>) {
             let _ = pwd();
         }
         _ => {
-            println!("unknown command: {}", tokens[0]);
+            // 外部命令处理
+            let child = Command::new(&tokens[0])
+                    .args(&tokens[1..])
+                    .stdin(Stdio::inherit())
+                    .stdout(Stdio::inherit())
+                    .stderr(Stdio::inherit())
+                    .spawn();
+
+                match child {
+                    Ok(mut child) => {
+                        // 父进程等待子进程结束
+                        if let Err(e) = child.wait() {
+                            eprintln!("Failed to wait for child: {}", e);
+                        }
+                    }
+                    Err(_) => {
+                        eprintln!("command not found: {}", tokens[0]);
+                    }
+                }
+            }
         }
     }
-}
 
 fn pwd() -> Option<()>{
     let cwd = env::current_dir().ok()?;
