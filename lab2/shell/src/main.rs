@@ -2,6 +2,8 @@ use std::io::Write;          // 输入输出模块
 use std::io::{self, BufRead};
 use std::env;
 use std::ptr;
+use std::fs::{File, OpenOptions};
+use std::cmp::min;
 use std::process::{Command, Stdio};
 use std::ffi::OsString;
 use std::sync::atomic::{AtomicBool, Ordering, AtomicPtr};
@@ -67,39 +69,118 @@ fn eval(tokens: Vec<String>) {
     if tokens.is_empty() {
         return;
     }
-    match tokens[0].as_str() {
-        "cd" => {
-            let _ = cd(&tokens[1..].to_vec());
-        }
-        "exit" => {
-            std::process::exit(0);
-        }
-        "pwd" =>{
-            let _ = pwd();
-        }
-        _ => {
-            // 外部命令处理
-            let child = Command::new(&tokens[0])
-                    .args(&tokens[1..])
-                    .stdin(Stdio::inherit())
-                    .stdout(Stdio::inherit())
-                    .stderr(Stdio::inherit())
-                    .spawn();
 
-                match child {
-                    Ok(mut child) => {
-                        // 父进程等待子进程结束
-                        if let Err(e) = child.wait() {
-                            eprintln!("Failed to wait for child: {}", e);
-                        }
-                    }
-                    Err(_) => {
-                        eprintln!("command not found: {}", tokens[0]);
-                    }
-                }
-            }
+    // 检查是否是后台执行
+    let mut tokens = tokens;
+    let background = if tokens.last().map(|s| s == "&").unwrap_or(false) {
+        tokens.pop();
+        true
+    } else {
+        false
+    };
+
+    // 拆分管道命令
+    let mut commands: Vec<Vec<String>> = vec![];
+    let mut current_cmd = vec![];
+    for token in tokens {
+        if token == "|" {
+            commands.push(current_cmd);
+            current_cmd = vec![];
+        } else {
+            current_cmd.push(token);
         }
     }
+    commands.push(current_cmd);
+
+    let mut previous_stdout = None;
+
+    for (i, command) in commands.iter().enumerate() {
+        let is_last = i == commands.len() - 1;
+        let (stdin, stdout) = match execute(command, is_last, previous_stdout) {
+            Some(io) => io,
+            None => return,
+        };
+        previous_stdout = Some(stdin);
+    }
+    // 如果不是后台进程，主线程会等待最后一个命令执行完成（已经在 execute_command 中完成）
+    if background {
+        println!("[后台执行]");
+    }
+}
+
+fn execute(
+    command: &[String],
+    is_last: bool,
+    previous_stdout: Option<Stdio>,
+) -> Option<(Stdio, Stdio)> {
+    let mut stdin = previous_stdout.unwrap_or(Stdio::inherit());
+    let mut stdout = if is_last { Stdio::inherit() } else { Stdio::piped() };
+
+    // 处理重定向
+    let mut last_command_index = command.len();
+    let mut redirect =
+        |token: &str, stdio: &mut Stdio, read: bool, write: bool, append: bool| -> Option<()> {
+            if let Some(index) = command.iter().position(|t| t == token) {
+                let file_path = command.get(index + 1)?;
+                if File::open(file_path).is_err() && (write || append) {
+                    File::create(file_path).ok()?;
+                }
+                let file = OpenOptions::new()
+                    .read(read)
+                    .write(write)
+                    .append(append)
+                    .create(true)
+                    .open(file_path)
+                    .ok()?;
+                *stdio = Stdio::from(file);
+                last_command_index = min(last_command_index, index);
+            }
+            Some(())
+        };
+    redirect("<", &mut stdin, true, false, false)?;
+    redirect(">", &mut stdout, false, true, false)?;
+    redirect(">>", &mut stdout, false, true, true)?;
+
+    let args = &command[..last_command_index];
+    if args.is_empty() {
+        return None;
+    }
+
+    let prog = &args[0];
+    let real_args = &args[1..];
+
+    // 内建命令处理
+    if prog == "cd" {
+        let _ = cd(&real_args.to_vec());
+        return None;
+    }
+    if prog == "exit" {
+        std::process::exit(0);
+    }
+    if prog == "pwd" {
+        let _ = pwd();
+        return None;
+    }
+
+    // 启动子进程
+    let mut child = Command::new(prog)
+        .args(real_args)
+        .stdin(stdin)
+        .stdout(stdout)
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|_| eprintln!("osh: command not found: {}", prog))
+        .ok()?;
+
+    // 如果是管道中间命令，返回其 stdout 用于下一步管道
+    let next_stdin = child.stdout.take().map(Stdio::from);
+    if is_last {
+        child.wait().ok()?;
+        Some((Stdio::null(), Stdio::null()))
+    } else {
+        Some((next_stdin?, Stdio::piped()))
+    }
+}
 
 fn pwd() -> Option<()>{
     let cwd = env::current_dir().ok()?;
