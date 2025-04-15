@@ -36,3 +36,9 @@ fn pwd() -> Option<()>{
     io::stdout().flush().ok()?;
     Some(())
 }
+
+fn cd(args: &Vec<String>) ->Option<()>{
+    let home = env::var("HOME").unwrap_or_default();
+    let path = args.get(0).cloned().unwrap_or(home);
+    env::set_current_dir(path).ok()?
+}
