@@ -1,13 +1,27 @@
 use std::io::Write;          // 输入输出模块
 use std::io;
 use std::env;
-use std::path::Path;
+use std::ptr;
 use std::ffi::OsString;
+use std::sync::atomic::{AtomicBool, Ordering, AtomicPtr};
 
-use nix::sys::signal;
+use nix::sys::signal::{signal, SigHandler, Signal};
+
+
+static INPUTING: AtomicBool = AtomicBool::new(true);
+extern "C" fn handle_sigint(_: libc::c_int) {
+    println!();
+    if INPUTING.load(Ordering::Relaxed) {
+        prompt().expect("error print prompt")
+    }
+}
 
 
 fn main() {
+    unsafe {nix::sys::signal::signal(
+        Signal::SIGINT,
+        SigHandler::Handler(handle_sigint)
+    ).expect("无法注册信号处理程序");}
     prompt();
     pwd();
 }
@@ -38,7 +52,7 @@ fn pwd() -> Option<()>{
 }
 
 // 使用静态变量存储上一次的目录
-static mut PREV_DIR: Option<OsString> = None;
+static PREV_DIR: AtomicPtr<OsString> = AtomicPtr::new(std::ptr::null_mut());
 
 fn cd(args: &Vec<String>) ->Option<()>{
     let home = env::var("HOME").unwrap_or_default();
@@ -47,7 +61,11 @@ fn cd(args: &Vec<String>) ->Option<()>{
     let target_path = match args.get(0).map(|s| s.as_str()) {
         Some("-") => {
             // 处理 cd - 的情况
-            unsafe { PREV_DIR.as_ref()?.to_owned().into_string().ok()? }
+            let ptr = PREV_DIR.load(Ordering::Acquire);
+            if ptr.is_null() {
+                return None;
+            }
+            unsafe { (*ptr).to_owned().into_string().ok()? }
         }
         Some(path) => path.to_string(),
         None => env::var("HOME").unwrap_or_default(), // 无参数时默认到家目录
