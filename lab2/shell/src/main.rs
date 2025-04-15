@@ -22,8 +22,10 @@ fn main() {
         Signal::SIGINT,
         SigHandler::Handler(handle_sigint)
     ).expect("无法注册信号处理程序");}
-    prompt();
-    pwd();
+    loop{
+        prompt();
+        pwd();
+    }
 }
 
 fn prompt() -> Option<()> {
@@ -52,40 +54,50 @@ fn pwd() -> Option<()>{
 }
 
 // 使用静态变量存储上一次的目录
-static PREV_DIR: AtomicPtr<OsString> = AtomicPtr::new(std::ptr::null_mut());
+static PREV_DIR: AtomicPtr<OsString> = AtomicPtr::new(ptr::null_mut());
 
-fn cd(args: &Vec<String>) ->Option<()>{
+fn cd(args: &Vec<String>) -> Option<()> {
     let home = env::var("HOME").unwrap_or_default();
+
+    // 保存当前目录作为 PREV_DIR（先获取当前目录）
+    let current_dir = env::current_dir().ok()?;
 
     // 获取目标路径
     let target_path = match args.get(0).map(|s| s.as_str()) {
         Some("-") => {
-            // 处理 cd - 的情况
             let ptr = PREV_DIR.load(Ordering::Acquire);
             if ptr.is_null() {
+                eprintln!("osh: cd: no previous directory");
                 return None;
             }
             unsafe { (*ptr).to_owned().into_string().ok()? }
         }
         Some(path) => path.to_string(),
-        None => env::var("HOME").unwrap_or_default(), // 无参数时默认到家目录
+        None => home.clone(),
     };
-    
-    // 保存当前目录作为下一次的 PREV_DIR
-    let current_dir = env::current_dir().ok()?;
-    unsafe {
-        PREV_DIR = Some(current_dir.into_os_string());
-    }
 
     // 处理路径中的 ~ 替换
     let resolved_path = if target_path == "~" {
-        home
+        home.clone()
     } else if target_path.starts_with("~/") {
-        format!("{}/{}", home.clone(), &target_path[2..])
+        format!("{}/{}", home, &target_path[2..])
     } else {
         target_path
     };
 
-    env::set_current_dir(resolved_path).ok()?;
+    // 切换目录
+    if env::set_current_dir(&resolved_path).is_err() {
+        eprintln!("osh: cd: no such file or directory: {}", resolved_path);
+        return None;
+    }
+
+    // 更新 PREV_DIR（释放旧的指针）
+    let old_ptr = PREV_DIR.swap(Box::into_raw(Box::new(current_dir.into_os_string())), Ordering::AcqRel);
+    if !old_ptr.is_null() {
+        unsafe {
+            drop(Box::from_raw(old_ptr)); // 释放旧内存，防止泄漏
+        }
+    }
+
     Some(())
 }
