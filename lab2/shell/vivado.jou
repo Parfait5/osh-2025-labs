@@ -3,12 +3,12 @@
 # SW Build 3865809 on Sun May  7 15:04:56 MDT 2023
 # IP Build 3864474 on Sun May  7 20:36:21 MDT 2023
 # SharedData Build 3865790 on Sun May 07 13:33:03 MDT 2023
-# Start of session at: Tue Apr 15 20:37:49 2025
-# Process ID: 71540
+# Start of session at: Tue Apr 15 22:53:05 2025
+# Process ID: 10119
 # Current directory: /home/yhx/osh-2025-labs/lab2/shell
 # Command line: vivado
 # Log file: /home/yhx/osh-2025-labs/lab2/shell/vivado.log
 # Journal file: /home/yhx/osh-2025-labs/lab2/shell/vivado.jou
-# Running On: yhx-ASUS-TUF-Gaming-A15-FA507XV-FA507XV, OS: Linux, CPU Frequency: 1420.699 MHz, CPU Physical cores: 16, Host memory: 32824 MB
+# Running On: yhx-ASUS-TUF-Gaming-A15-FA507XV-FA507XV, OS: Linux, CPU Frequency: 2037.238 MHz, CPU Physical cores: 16, Host memory: 32824 MB
 #-----------------------------------------------------------
 start_gui
