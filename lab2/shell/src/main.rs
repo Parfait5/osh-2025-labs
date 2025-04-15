@@ -1,11 +1,11 @@
 use std::io::Write;          // 输入输出模块
-use std::io;
+use std::io::{self, BufRead};
 use std::env;
 use std::ptr;
 use std::ffi::OsString;
 use std::sync::atomic::{AtomicBool, Ordering, AtomicPtr};
 
-use nix::sys::signal::{signal, SigHandler, Signal};
+use nix::sys::signal::{SigHandler, Signal};
 
 
 static INPUTING: AtomicBool = AtomicBool::new(true);
@@ -22,9 +22,25 @@ fn main() {
         Signal::SIGINT,
         SigHandler::Handler(handle_sigint)
     ).expect("无法注册信号处理程序");}
+
+    let stdin = io::stdin();
+    let mut stdin_lock = stdin.lock();
+
     loop{
+        INPUTING.store(true, Ordering::Relaxed);
         prompt();
-        pwd();
+
+        let mut line = String::new();
+        if stdin_lock.read_line(&mut line).is_err() {
+            break; // 读入错误（可能是 EOF），退出
+        }
+        if line.is_empty() {
+            break; // EOF（Ctrl+D）
+        }
+        INPUTING.store(false, Ordering::Relaxed);
+
+        let tokens = tokenize(line.trim().to_string());
+        eval(tokens);
     }
 }
 
@@ -43,6 +59,26 @@ fn tokenize(command:String) ->Vec<String>{
             env::var(token.strip_prefix('$').unwrap()).unwrap_or_default()
         }else{token.to_string()}
     }).collect()
+}
+
+fn eval(tokens: Vec<String>) {
+    if tokens.is_empty() {
+        return;
+    }
+    match tokens[0].as_str() {
+        "cd" => {
+            let _ = cd(&tokens[1..].to_vec());
+        }
+        "exit" => {
+            std::process::exit(0);
+        }
+        "pwd" =>{
+            let _ = pwd();
+        }
+        _ => {
+            println!("unknown command: {}", tokens[0]);
+        }
+    }
 }
 
 fn pwd() -> Option<()>{
