@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 nix = "0.26"
 libc = "0.2"
+lazy_static = "1.4.0"

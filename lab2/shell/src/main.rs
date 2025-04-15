@@ -4,12 +4,16 @@ use std::env;
 use std::ptr;
 use std::fs::{File, OpenOptions};
 use std::cmp::min;
-use std::process::{Command, Stdio};
+use std::process::{Command, Stdio, Child};
 use std::ffi::OsString;
-use std::sync::atomic::{AtomicBool, Ordering, AtomicPtr};
+use std::sync::{Mutex, atomic::{AtomicBool, Ordering, AtomicPtr}};
 
 use nix::sys::signal::{SigHandler, Signal};
+use lazy_static::lazy_static;
 
+lazy_static! {
+    static ref BG_CHILDREN: Mutex<Vec<Child>> = Mutex::new(vec![]);
+}
 
 static INPUTING: AtomicBool = AtomicBool::new(true);
 extern "C" fn handle_sigint(_: libc::c_int) {
@@ -93,17 +97,24 @@ fn eval(tokens: Vec<String>) {
     commands.push(current_cmd);
 
     let mut previous_stdout = None;
+    let mut bg_children_handles: Vec<Child> = vec![];
 
     for (i, command) in commands.iter().enumerate() {
         let is_last = i == commands.len() - 1;
-        let (stdin, stdout) = match execute(command, is_last, previous_stdout) {
+        let (stdin, child_opt) = match execute(command, is_last, previous_stdout, background) {
             Some(io) => io,
             None => return,
         };
+        if let Some(child) = child_opt {
+            bg_children_handles.push(child);
+        }
         previous_stdout = Some(stdin);
     }
-    // 如果不是后台进程，主线程会等待最后一个命令执行完成（已经在 execute_command 中完成）
+
+    // 如果是后台运行，则将所有子进程句柄保存在全局后台列表中并立即返回提示
     if background {
+        let mut bg_lock = BG_CHILDREN.lock().unwrap();
+        bg_lock.extend(bg_children_handles);
         println!("[后台执行]");
     }
 }
@@ -112,7 +123,8 @@ fn execute(
     command: &[String],
     is_last: bool,
     previous_stdout: Option<Stdio>,
-) -> Option<(Stdio, Stdio)> {
+    background:bool,
+) -> Option<(Stdio, Option<Child>)> {
     let mut stdin = previous_stdout.unwrap_or(Stdio::inherit());
     let mut stdout = if is_last { Stdio::inherit() } else { Stdio::piped() };
 
@@ -161,24 +173,47 @@ fn execute(
         let _ = pwd();
         return None;
     }
+    if prog == "wait" {
+        let _ = wait_bg();
+        return None;
+    }
+    if prog == "fg" {
+        let pid = args.get(1).and_then(|s| s.parse::<u32>().ok());
+        fg(pid);
+        return None;
+    }
+    if prog == "bg" {
+        let pid = args.get(1).and_then(|s| s.parse::<u32>().ok());
+        bg(pid);
+        return None;
+    }
 
-    // 启动子进程
-    let mut child = Command::new(prog)
-        .args(real_args)
+    let mut child_builder = Command::new(prog);
+    child_builder.args(real_args)
         .stdin(stdin)
         .stdout(stdout)
-        .stderr(Stdio::inherit())
-        .spawn()
-        .map_err(|_| eprintln!("osh: command not found: {}", prog))
-        .ok()?;
+        .stderr(Stdio::inherit());
+
+    let mut child = match child_builder.spawn() {
+        Ok(child) => child,
+        Err(_) => {
+            eprintln!("command not found: {}", prog);
+            return None;
+        }
+    };
 
     // 如果是管道中间命令，返回其 stdout 用于下一步管道
-    let next_stdin = child.stdout.take().map(Stdio::from);
     if is_last {
-        child.wait().ok()?;
-        Some((Stdio::null(), Stdio::null()))
+        if background {
+            Some((Stdio::null(), Some(child)))
+        }else{
+            child.wait().ok()?;
+            Some((Stdio::null(), None))
+        }
     } else {
-        Some((next_stdin?, Stdio::piped()))
+        // 中间命令需要返回 stdout 管道
+        let next_stdout = child.stdout.take().map(Stdio::from)?;
+        Some((next_stdout, Some(child)))
     }
 }
 
@@ -237,4 +272,55 @@ fn cd(args: &Vec<String>) -> Option<()> {
     }
 
     Some(())
+}
+
+/// 等待所有后台进程结束
+fn wait_bg() {
+    let mut bg_lock = BG_CHILDREN.lock().unwrap();
+    for child in bg_lock.iter_mut() {
+        println!("Waiting for background process {}", child.id());
+        let _ = child.wait();
+    }
+    bg_lock.clear();
+}
+
+/// 将指定后台进程（或最近的）切换到前台执行
+fn fg(pid_opt: Option<u32>) {
+    let mut bg_lock = BG_CHILDREN.lock().unwrap();
+    let index = if let Some(pid) = pid_opt {
+        bg_lock.iter().position(|child| child.id() == pid)
+    } else {
+        bg_lock.len().checked_sub(1)
+    };
+
+    if let Some(i) = index {
+        let mut child = bg_lock.remove(i);
+        println!("Bringing process {} to foreground", child.id());
+        // 如果进程处于暂停状态，发送 SIGCONT 使之继续
+        unsafe {
+            libc::kill(child.id() as i32, libc::SIGCONT);
+        }
+        let _ = child.wait();
+    } else {
+        eprintln!("fg: no such process");
+    }
+}
+
+/// 恢复暂停的后台进程运行（不等待）
+fn bg(pid_opt: Option<u32>) {
+    let bg_lock = BG_CHILDREN.lock().unwrap();
+    let child_opt = if let Some(pid) = pid_opt {
+        bg_lock.iter().find(|child| child.id() == pid)
+    } else {
+        bg_lock.last()
+    };
+
+    if let Some(child) = child_opt {
+        println!("Resuming background process {}", child.id());
+        unsafe {
+            libc::kill(child.id() as i32, libc::SIGCONT);
+        }
+    } else {
+        eprintln!("bg: no such process");
+    }
 }
