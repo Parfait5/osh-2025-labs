@@ -41,6 +41,7 @@ fn main() {
 
         let tokens = tokenize(line.trim().to_string());
         eval(tokens);
+        print!("\n");
     }
 }
 
