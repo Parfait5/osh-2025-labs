@@ -114,8 +114,10 @@ fn eval(tokens: Vec<String>) {
     // 如果是后台运行，则将所有子进程句柄保存在全局后台列表中并立即返回提示
     if background {
         let mut bg_lock = BG_CHILDREN.lock().unwrap();
+        for child in bg_children_handles.iter() {
+            println!("[后台执行] PID: {}", child.id());
+        }
         bg_lock.extend(bg_children_handles);
-        println!("[后台执行]");
     }
 }
 
