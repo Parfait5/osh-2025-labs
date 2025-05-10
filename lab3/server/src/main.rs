@@ -48,13 +48,21 @@ fn respond_with_status(stream: &mut TcpStream, code: u16, body: Option<&[u8]>) -
 
 fn handle_client(mut stream: TcpStream) -> std::io::Result<()> {
     let mut buffer = [0u8; 4096];
-    let bytes_read = stream.read(&mut buffer)?;
-    if bytes_read == 0 {
-        return Ok(());
+    let mut request_data = Vec::new();
+
+    loop {
+        let bytes_read = stream.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break; // 客户端断开连接
+        }
+        request_data.extend_from_slice(&buffer[..bytes_read]);
+        if bytes_read < buffer.len() {
+            break; // 已经读完，没有更多数据
+        }
     }
 
-    // 解析请求
-    let request = String::from_utf8_lossy(&buffer[..bytes_read]);
+    // 尝试解析请求
+    let request = String::from_utf8_lossy(&request_data);
     let (method, path, version) = match parse_request_line(&request) {
         Ok(parts) => parts,
         Err(status) => {
@@ -71,15 +79,14 @@ fn handle_client(mut stream: TcpStream) -> std::io::Result<()> {
 
     // 规范化路径
     let clean_path = if path == "/" { "/index.html" } else { &path };
-    if clean_path.contains("..") {    // 防止恶意访问上级目录
+    if clean_path.contains("..") {
         respond_with_status(&mut stream, 403, None)?;
         return Ok(());
     }
 
-    let file_path = &clean_path[1..]; // 去掉开头 '/'
+    let file_path = &clean_path[1..];
     let fs_path = Path::new(".").join(file_path);
 
-    // 检查资源
     let metadata = match fs::metadata(&fs_path) {
         Ok(m) => m,
         Err(_) => {
@@ -89,12 +96,10 @@ fn handle_client(mut stream: TcpStream) -> std::io::Result<()> {
     };
 
     if metadata.is_dir() {
-        // 请求目录，返回 500
         respond_with_status(&mut stream, 500, None)?;
         return Ok(());
     }
 
-    // 读取文件内容
     let content = match fs::read(&fs_path) {
         Ok(data) => data,
         Err(_) => {
@@ -103,7 +108,6 @@ fn handle_client(mut stream: TcpStream) -> std::io::Result<()> {
         }
     };
 
-    // 发送 200 响应
     let header = format!(
         "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n",
         content.len()
