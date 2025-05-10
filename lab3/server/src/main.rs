@@ -22,3 +22,25 @@ fn main(){
         }
     }
 }
+
+/// 返回指定状态码和可选消息体
+fn respond_with_status(stream: &mut TcpStream, code: u16, body: Option<&[u8]>) -> std::io::Result<()> {
+    let (status_text, default_body) = match code {
+        200 => ("200 OK", b"" as &[u8]),
+        403 => ("403 Forbidden", b"Forbidden" as &[u8]),
+        404 => ("404 Not Found", b"Not Found" as &[u8]),
+        500 => ("500 Internal Server Error", b"Internal Server Error" as &[u8]),
+        _ => ("500 Internal Server Error", b"Internal Server Error" as &[u8]),
+    };
+    let body = body.unwrap_or(default_body);
+    let header = format!(
+        "HTTP/1.0 {}\r\nContent-Length: {}\r\n\r\n",
+        status_text,
+        body.len()
+    );
+    stream.write_all(header.as_bytes())?;
+    if !body.is_empty() {
+        stream.write_all(body)?;
+    }
+    Ok(())
+}
