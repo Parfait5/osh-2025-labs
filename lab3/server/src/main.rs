@@ -28,10 +28,10 @@ fn main(){
 fn respond_with_status(stream: &mut TcpStream, code: u16, body: Option<&[u8]>) -> std::io::Result<()> {
     let (status_text, default_body) = match code {
         200 => ("200 OK", b"" as &[u8]),
-        403 => ("403 Forbidden", b"Forbidden" as &[u8]),
-        404 => ("404 Not Found", b"Not Found" as &[u8]),
-        500 => ("500 Internal Server Error", b"Internal Server Error" as &[u8]),
-        _ => ("500 Internal Server Error", b"Internal Server Error" as &[u8]),
+        403 => ("403 Forbidden", b"403 Forbidden" as &[u8]),
+        404 => ("404 Not Found", b"404 Not Found" as &[u8]),
+        500 => ("500 Internal Server Error", b"500 Internal Server Error" as &[u8]),
+        _ => ("500 Internal Server Error", b"500 Internal Server Error" as &[u8]),
     };
     let body = body.unwrap_or(default_body);
     let header = format!(
