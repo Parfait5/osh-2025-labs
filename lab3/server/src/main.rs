@@ -113,3 +113,14 @@ fn handle_client(mut stream: TcpStream) -> std::io::Result<()> {
     Ok(())
 }
 
+/// 解析请求行，返回 (method, path, version)
+/// 错误时返回对应 HTTP 状态码
+fn parse_request_line(request: &str) -> Result<(&str, &str, &str), u16> {
+    let mut lines = request.lines();
+    let request_line = lines.next().ok_or(500u16)?;
+    let parts: Vec<&str> = request_line.split_whitespace().collect();
+    if parts.len() != 3 {
+        return Err(500);
+    }
+    Ok((parts[0], parts[1], parts[2]))
+}
