@@ -44,3 +44,70 @@ fn respond_with_status(stream: &mut TcpStream, code: u16, body: Option<&[u8]>) -
     }
     Ok(())
 }
+
+fn handle_client(mut stream: TcpStream) -> std::io::Result<()> {
+    let mut buffer = [0u8; 4096];
+    let bytes_read = stream.read(&mut buffer)?;
+    if bytes_read == 0 {
+        return Ok(());
+    }
+
+    // 解析请求
+    let request = String::from_utf8_lossy(&buffer[..bytes_read]);
+    let (method, path, version) = match parse_request_line(&request) {
+        Ok(parts) => parts,
+        Err(status) => {
+            respond_with_status(&mut stream, status, None)?;
+            return Ok(());
+        }
+    };
+
+    // 仅支持 GET 和 HTTP/1.0
+    if method != "GET" || version != "HTTP/1.0" {
+        respond_with_status(&mut stream, 500, None)?;
+        return Ok(());
+    }
+
+    // 规范化路径
+    let clean_path = if path == "/" { "/index.html" } else { &path };
+    if clean_path.contains("..") {    // 防止恶意访问上级目录
+        respond_with_status(&mut stream, 403, None)?;
+        return Ok(());
+    }
+
+    let file_path = &clean_path[1..]; // 去掉开头 '/'
+    let fs_path = Path::new(".").join(file_path);
+
+    // 检查资源
+    let metadata = match fs::metadata(&fs_path) {
+        Ok(m) => m,
+        Err(_) => {
+            respond_with_status(&mut stream, 404, None)?;
+            return Ok(());
+        }
+    };
+
+    if metadata.is_dir() {
+        // 请求目录，返回 500
+        respond_with_status(&mut stream, 500, None)?;
+        return Ok(());
+    }
+
+    // 读取文件内容
+    let content = match fs::read(&fs_path) {
+        Ok(data) => data,
+        Err(_) => {
+            respond_with_status(&mut stream, 500, None)?;
+            return Ok(());
+        }
+    };
+
+    // 发送 200 响应
+    let header = format!(
+        "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n",
+        content.len()
+    );
+    stream.write_all(header.as_bytes())?;
+    stream.write_all(&content)?;
+    Ok(())
+}
