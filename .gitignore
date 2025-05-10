@@ -8,4 +8,7 @@ bubble_sort
 *.swp
 *~
 
+# 忽略 Rust 构建结果
+/target/
+
 build/ # ignore build folder
