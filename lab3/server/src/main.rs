@@ -8,6 +8,8 @@ use std::{
     thread,
 };
 use std::sync::mpsc::{self, Sender, Receiver};
+use std::time::SystemTime;
+
 
 // ---------- 线程池定义 ----------
 struct ThreadPool {
@@ -44,9 +46,14 @@ impl ThreadPool {
 }
 
 // ---------- 缓存结构 ----------
+struct CacheEntry {
+    data: Vec<u8>,
+    modified: SystemTime,
+}
+
 #[derive(Clone)]
 struct Cache {
-    map: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    map: Arc<Mutex<HashMap<String, CacheEntry>>>,
 }
 
 impl Cache {
@@ -58,18 +65,26 @@ impl Cache {
 
     fn get_or_load(&self, path: &str) -> Option<Vec<u8>> {
         let mut cache = self.map.lock().unwrap();
-
-        if let Some(content) = cache.get(path) {
-            return Some(content.clone());
-        }
-
+    
         let file_path = Path::new(".").join(&path[1..]);
-        if let Ok(data) = fs::read(&file_path) {
-            cache.insert(path.to_string(), data.clone());
-            Some(data)
-        } else {
-            None
+        let metadata = fs::metadata(&file_path).ok()?;
+        let modified = metadata.modified().ok()?;
+    
+        if let Some(entry) = cache.get(path) {
+            if entry.modified == modified {
+                return Some(entry.data.clone());
+            }
         }
+    
+        let data = fs::read(&file_path).ok()?;
+        cache.insert(
+            path.to_string(),
+            CacheEntry {
+                data: data.clone(),
+                modified,
+            },
+        );
+        Some(data)
     }
 
     // 可选：缓存失效机制（例如手动清除，或定期清理）
