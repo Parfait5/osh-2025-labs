@@ -1,20 +1,94 @@
-use std::fs;
-use std::thread;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::{
+    collections::HashMap,
+    fs,
+    io::{Read, Write},
+    net::{TcpListener, TcpStream},
+    path::Path,
+    sync::{Arc, Mutex},
+    thread,
+};
+use std::sync::mpsc::{self, Sender, Receiver};
 
-fn main(){
-    // 绑定地址并监听
+// ---------- 线程池定义 ----------
+struct ThreadPool {
+    workers: Vec<thread::JoinHandle<()>>,
+    sender: Sender<Job>,
+}
+
+type Job = Box<dyn FnOnce() + Send + 'static>;
+
+impl ThreadPool {
+    fn new(size: usize) -> ThreadPool {
+        assert!(size > 0);
+        let (sender, receiver): (Sender<Job>, Receiver<Job>) = mpsc::channel();
+        let receiver = Arc::new(Mutex::new(receiver));
+
+        let mut workers = Vec::with_capacity(size);
+        for _ in 0..size {
+            let receiver = Arc::clone(&receiver);
+            workers.push(thread::spawn(move || loop {
+                let job = receiver.lock().unwrap().recv().unwrap();
+                job();
+            }));
+        }
+
+        ThreadPool { workers, sender }
+    }
+
+    fn execute<F>(&self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        self.sender.send(Box::new(f)).unwrap();
+    }
+}
+
+// ---------- 缓存结构 ----------
+#[derive(Clone)]
+struct Cache {
+    map: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+}
+
+impl Cache {
+    fn new() -> Cache {
+        Cache {
+            map: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn get_or_load(&self, path: &str) -> Option<Vec<u8>> {
+        let mut cache = self.map.lock().unwrap();
+
+        if let Some(content) = cache.get(path) {
+            return Some(content.clone());
+        }
+
+        let file_path = Path::new(".").join(&path[1..]);
+        if let Ok(data) = fs::read(&file_path) {
+            cache.insert(path.to_string(), data.clone());
+            Some(data)
+        } else {
+            None
+        }
+    }
+
+    // 可选：缓存失效机制（例如手动清除，或定期清理）
+}
+
+// ---------- 主函数 ----------
+fn main() {
     let listener = TcpListener::bind("0.0.0.0:8000").expect("Failed to bind address");
     println!("Listening on http://0.0.0.0:8000");
+
+    let pool = ThreadPool::new(4); // 可配置线程数量
+    let cache = Cache::new();
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                // 并发处理：为每个连接创建新线程
-                thread::spawn(|| {
-                    if let Err(e) = handle_client(stream) {
+                let cache = cache.clone();
+                pool.execute(move || {
+                    if let Err(e) = handle_client(stream, &cache) {
                         eprintln!("Client handling error: {}", e);
                     }
                 });
@@ -22,6 +96,59 @@ fn main(){
             Err(e) => eprintln!("Connection failed: {}", e),
         }
     }
+}
+
+// ---------- 响应处理 ----------
+fn handle_client(mut stream: TcpStream, cache: &Cache) -> std::io::Result<()> {
+    let mut buffer = [0u8; 4096];
+    let mut request_data = Vec::new();
+
+    loop {
+        let bytes_read = stream.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        request_data.extend_from_slice(&buffer[..bytes_read]);
+        if bytes_read < buffer.len() {
+            break;
+        }
+    }
+
+    let request = String::from_utf8_lossy(&request_data);
+    let (method, path, version) = match parse_request_line(&request) {
+        Ok(parts) => parts,
+        Err(status) => {
+            respond_with_status(&mut stream, status, None)?;
+            return Ok(());
+        }
+    };
+
+    if method != "GET" || version != "HTTP/1.0" {
+        respond_with_status(&mut stream, 500, None)?;
+        return Ok(());
+    }
+
+    let clean_path = if path == "/" { "/index.html" } else { &path };
+    if clean_path.contains("..") {
+        respond_with_status(&mut stream, 403, None)?;
+        return Ok(());
+    }
+
+    // 从缓存中读取（不存在时从磁盘加载）
+    match cache.get_or_load(clean_path) {
+        Some(content) => {
+            let header = format!(
+                "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n",
+                content.len()
+            );
+            stream.write_all(header.as_bytes())?;
+            stream.write_all(&content)?;
+        }
+        None => {
+            respond_with_status(&mut stream, 404, None)?;
+        }
+    }
+    Ok(())
 }
 
 /// 返回指定状态码和可选消息体
@@ -43,77 +170,6 @@ fn respond_with_status(stream: &mut TcpStream, code: u16, body: Option<&[u8]>) -
     if !body.is_empty() {
         stream.write_all(body)?;
     }
-    Ok(())
-}
-
-fn handle_client(mut stream: TcpStream) -> std::io::Result<()> {
-    let mut buffer = [0u8; 4096];
-    let mut request_data = Vec::new();
-
-    loop {
-        let bytes_read = stream.read(&mut buffer)?;
-        if bytes_read == 0 {
-            break; // 客户端断开连接
-        }
-        request_data.extend_from_slice(&buffer[..bytes_read]);
-        if bytes_read < buffer.len() {
-            break; // 已经读完，没有更多数据
-        }
-    }
-
-    // 尝试解析请求
-    let request = String::from_utf8_lossy(&request_data);
-    let (method, path, version) = match parse_request_line(&request) {
-        Ok(parts) => parts,
-        Err(status) => {
-            respond_with_status(&mut stream, status, None)?;
-            return Ok(());
-        }
-    };
-
-    // 仅支持 GET 和 HTTP/1.0
-    if method != "GET" || version != "HTTP/1.0" {
-        respond_with_status(&mut stream, 500, None)?;
-        return Ok(());
-    }
-
-    // 规范化路径
-    let clean_path = if path == "/" { "/index.html" } else { &path };
-    if clean_path.contains("..") {
-        respond_with_status(&mut stream, 403, None)?;
-        return Ok(());
-    }
-
-    let file_path = &clean_path[1..];
-    let fs_path = Path::new(".").join(file_path);
-
-    let metadata = match fs::metadata(&fs_path) {
-        Ok(m) => m,
-        Err(_) => {
-            respond_with_status(&mut stream, 404, None)?;
-            return Ok(());
-        }
-    };
-
-    if metadata.is_dir() {
-        respond_with_status(&mut stream, 500, None)?;
-        return Ok(());
-    }
-
-    let content = match fs::read(&fs_path) {
-        Ok(data) => data,
-        Err(_) => {
-            respond_with_status(&mut stream, 500, None)?;
-            return Ok(());
-        }
-    };
-
-    let header = format!(
-        "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n",
-        content.len()
-    );
-    stream.write_all(header.as_bytes())?;
-    stream.write_all(&content)?;
     Ok(())
 }
 
